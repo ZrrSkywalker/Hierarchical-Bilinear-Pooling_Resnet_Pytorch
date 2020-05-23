@@ -3,62 +3,62 @@ import torch
 import math
 from collections import OrderedDict
 
-__all__ = ['ResNet', 'resnet18', 'resnet34', 'resnet50', 'resnet101',
-           'resnet152']
+__all__ = ['ResNet', , 'resnet34', 'resnet50', 'resnet101']
 
 
-model_urls = {
-    'resnet18': 'https://download.pytorch.org/models/resnet18-5c106cde.pth',
+model_urls = {    
     'resnet34': 'https://download.pytorch.org/models/resnet34-333f7ec4.pth',
     'resnet50': 'https://download.pytorch.org/models/resnet50-19c8e357.pth',
     'resnet101': 'https://download.pytorch.org/models/resnet101-5d3b4d8f.pth',
-    'resnet152': 'https://download.pytorch.org/models/resnet152-b121ed2d.pth',
 }
 
 
 def conv3x3(in_planes, out_planes, stride=1):
-    # "3x3 convolution with padding"
     return nn.Conv2d(in_planes, out_planes, kernel_size=3, stride=stride, padding=1, bias=False)
 
-
+# 3*3 + 3*3
 class BasicBlock(nn.Module):
+    # 比较进出block时channel数发生变化的放缩参数
     expansion = 1
     def __init__(self, inplanes, planes, stride=1, downsample=None, last_layer=False):
         super(BasicBlock, self).__init__()
+        
         m = OrderedDict()
         m['conv1'] = conv3x3(inplanes, planes, stride)
         m['bn1'] = nn.BatchNorm2d(planes)
         m['relu1'] = nn.ReLU(inplace=True)
         m['conv2'] = conv3x3(planes, planes)
         m['bn2'] = nn.BatchNorm2d(planes)
+        
         self.group1 = nn.Sequential(m)
-
         self.relu = nn.Sequential(nn.ReLU(inplace=True))
+        
+        # channel数是否发生改变
         self.downsample = downsample
-
+        # 最后一层需要提取特征图做HBP
         self.last_layer = last_layer
 
     def forward(self, x):
         if self.downsample is not None:
-            residual = self.downsample(x)
+            shortcut = self.downsample(x)
         else:
-            residual = x
-        feature = self.group1(x)
-        out = feature + residual
-
-
-
+            shortcut = x
+       
+        out = self.group1(x) + shortcut
         out = self.relu(out)
+
         if self.last_layer == False:
             return out
         else:
             return out, out
 
-
+# 1*1 + 3*3 + 1*1
 class Bottleneck(nn.Module):
+    # 放缩为4
     expansion = 4
     def __init__(self, inplanes, planes, stride=1, downsample=None, last_layer=False):
         super(Bottleneck, self).__init__()
+        
         m  = OrderedDict()
         m['conv1'] = nn.Conv2d(inplanes, planes, kernel_size=1, bias=False)
         m['bn1'] = nn.BatchNorm2d(planes)
@@ -68,20 +68,21 @@ class Bottleneck(nn.Module):
         m['relu2'] = nn.ReLU(inplace=True)
         m['conv3'] = nn.Conv2d(planes, planes * 4, kernel_size=1, bias=False)
         m['bn3'] = nn.BatchNorm2d(planes * 4)
+        
         self.group1 = nn.Sequential(m)
-
         self.relu= nn.Sequential(nn.ReLU(inplace=True))
+        
         self.downsample = downsample
 
         self.last_layer = last_layer
 
     def forward(self, x):
         if self.downsample is not None:
-            residual = self.downsample(x)
+            shortcut = self.downsample(x)
         else:
-            residual = x
+            shortcut = x
 
-        out = self.group1(x) + residual
+        out = self.group1(x) + shortcut
         out = self.relu(out)
         if self.last_layer == False:
             return out
@@ -91,6 +92,7 @@ class Bottleneck(nn.Module):
 
 class ResNet(nn.Module):
     def __init__(self, block, layers):
+        # 比较channel数是否变化的入channel数
         self.inplanes = 64
         super(ResNet, self).__init__()
 
@@ -99,11 +101,16 @@ class ResNet(nn.Module):
         m['bn1'] = nn.BatchNorm2d(64)
         m['relu1'] = nn.ReLU(inplace=True)
         m['maxpool'] = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
+        
+        # 7*7
         self.group1 = nn.Sequential(m)
 
+        # 3个大块
         self.layer1 = self._make_layer(block, 64, layers[0], isAttn=False)
         self.layer2 = self._make_layer(block, 128, layers[1], stride=2, isAttn=True)
         self.layer3 = self._make_layer(block, 256, layers[2], stride=2, isAttn=True)
+        
+        # 最后一块
         self.layer4_0 = self._make_layer4(block, 512, stride=2, flag=True)
         self.layer4_1 = self._make_layer4(block, 512, stride=1, flag=True)
         self.layer4_2 = self._make_layer4(block, 512, stride=1, flag=False)
@@ -120,8 +127,11 @@ class ResNet(nn.Module):
 
         layers = []
         layers.append(block(self.inplanes, planes, stride, downsample))
+        
+        # 不断更新inplanes
         self.inplanes = planes * block.expansion
         for i in range(1, blocks):
+            # 需要最后特征做HBP
             if isAttn == True:
                 if i == blocks - 1:
                     layers.append(block(self.inplanes, planes, last_layer=True))
@@ -155,6 +165,7 @@ class ResNet(nn.Module):
         x, fea4_1 = self.layer4_1(x)
         fea4_2 = self.layer4_2(x)
 
+        # 用作HBP
         return fea4_0, fea4_1, fea4_2
 
 
@@ -188,14 +199,6 @@ def load_state_dict(model, model_root):
 
 
 
-
-def resnet18(pretrained=False, model_root=None):
-    model = ResNet(BasicBlock, [2, 2, 2, 2])
-    if pretrained:
-        load_state_dict(model, model_root=model_root)
-    return model
-
-
 def resnet34(pretrained=False, model_root=None):
     model = ResNet(BasicBlock, [3, 4, 6, 3])
     if pretrained:
@@ -212,13 +215,6 @@ def resnet50(pretrained=False, model_root=None):
 
 def resnet101(pretrained=False, model_root=None):
     model = ResNet(Bottleneck, [3, 4, 23, 3])
-    if pretrained:
-        load_state_dict(model, model_root=model_root)
-    return model
-
-
-def resnet152(pretrained=False, model_root=None):
-    model = ResNet(Bottleneck, [3, 8, 36, 3])
     if pretrained:
         load_state_dict(model, model_root=model_root)
     return model
